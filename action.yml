@@ -1,0 +1,144 @@
+---
+name: "🧳 Calculate Build Number"
+description: "Determine the next SemVer based on the type tags"
+
+inputs:
+   token:
+    required: true
+    description: "GitHub Token to Authenticate using"
+
+outputs:
+  release-type:
+    description: "List of Modules with Changes"
+    value: ${{ steps.check_pr_label.outputs.release-type }}
+  current-version:
+    description: "The current determined SemVer"
+    value: ${{ steps.prev-version.outputs.result }}
+  new-version:
+    description: "The new SemVer for this release based on the release type"
+    value: ${{ steps.new-version.outputs.result }}
+  new-major-version:
+    description: "The Major SemVer for this release based on the release type"
+    value: ${{ steps.new-major-version.outputs.result }}
+  new-minor-version:
+    description: "The Major.Minor SemVer for this release based on the release type"
+    value: ${{ steps.new-minor-version.outputs.result }}
+
+runs:
+  using: "composite"
+  steps:
+
+      # I'm getting the labels from the API and not the context("contains(github.event.pull_request.labels.*.name, 'Env Promote')") as the labels
+      # are added in 2nd API call so they aren't included in the PR context
+      - name: Check PR labels
+        shell: bash
+        id: check_pr_label
+        env:
+          PR_URL: ${{github.event.pull_request.html_url}}
+          GITHUB_TOKEN: ${{ inputs.token }}
+        run: |
+          LABELS=$(gh pr view $PR_URL --json labels  --jq '.labels[]| select((.name|contains("minor")) or (.name|contains("major")) or (.name|contains("patch")) or (.name|contains("no-release"))) |.name')
+          NUMBER_OF_LABELS=$(echo "$LABELS" |wc -w)
+          if [ "$NUMBER_OF_LABELS" -eq "1" ] ; then
+            echo "Found: $LABELS"
+            PRTYPE="Found: $LABELS"
+            echo "::set-output name=release-type::$LABELS"
+          elif [ "$NUMBER_OF_LABELS" -gt "1" ] ; then
+            echo "::error ::Too many release type labels: $( echo $LABELS | tr '\n' ' ' )"
+            PRTYPE="#Warning /nToo many release type labels: $( echo $LABELS | tr '\n' ' ' )"
+  
+          else
+            echo "::error ::No release 'type' labels found(patch/minor/major/no-release)"
+            PRTYPE="#Warning /nNo release 'type' labels found(patch/minor/major/no-release)"
+  
+          fi
+
+     # Check the current build tags
+      - name: Detect previous version number
+        uses: actions/github-script@v4
+        id: prev-version
+        # env:
+          # PACKAGE_NAME: '${{ matrix.directory }}'
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const query = `query($owner: String!, $repo: String!, $refPrefix: String!) {
+              repository(owner: $owner, name: $repo) {
+                refs(refPrefix: $refPrefix, first: 1, orderBy: {field: TAG_COMMIT_DATE, direction: DESC}) {
+                  edges { node { name } }
+                }
+              }
+            }`;
+            const result = await github.graphql(query, { owner, repo,
+              refPrefix: `refs/tags/`,
+            });
+            const prevNode = result.repository.refs.edges[0];
+            const prevVer = prevNode ? prevNode.node.name : '0.0.0';
+            console.log('Found previous version', prevVer);
+            return prevVer;
+          result-encoding: string
+
+      # Review the Type Tag and calculate the build Number
+      - name: Determine new version number
+        uses: actions/github-script@v4
+        id: new-version
+        env:
+          PREV_VERSION: '${{ steps.prev-version.outputs.result }}'
+          RELEASE_TYPE: '${{ steps.check_pr_label.outputs.release-type }}'
+        with:
+          script: |
+            const { PREV_VERSION, RELEASE_TYPE } = process.env;
+            console.log('Previous version was', PREV_VERSION);
+            console.log('Release type is', RELEASE_TYPE);
+
+            const numbers = PREV_VERSION.split('.');
+            const numberIdx = ['type/major', 'type/minor', 'type/patch'].indexOf(RELEASE_TYPE);
+            numbers[numberIdx] = parseInt(numbers[numberIdx]) + 1;
+            for (let i = numberIdx + 1; i < numbers.length; i++) {
+              numbers[i] = 0;
+            }
+            return numbers.join('.');
+          result-encoding: string
+
+      - name: Determine new major version number
+        uses: actions/github-script@v4
+        id: new-major-version
+        env:
+          PREV_VERSION: '${{ steps.prev-version.outputs.result }}'
+          RELEASE_TYPE: '${{ steps.check_pr_label.outputs.release-type }}'
+        with:
+          script: |
+            const { PREV_VERSION, RELEASE_TYPE } = process.env;
+            console.log('Previous version was', PREV_VERSION);
+            console.log('Release type is', RELEASE_TYPE);
+
+            const numbers = PREV_VERSION.split('.');
+            const numberIdx = ['type/major', 'type/minor', 'type/patch'].indexOf(RELEASE_TYPE);
+            numbers[numberIdx] = parseInt(numbers[numberIdx]) + 1;
+            for (let i = numberIdx + 1; i < numbers.length; i++) {
+              numbers[i] = 0;
+            }
+            return numbers[0];
+          result-encoding: string
+
+      - name: Determine new minor version number
+        uses: actions/github-script@v4
+        id: new-minor-version
+        env:
+          PREV_VERSION: '${{ steps.prev-version.outputs.result }}'
+          RELEASE_TYPE: '${{ steps.check_pr_label.outputs.release-type }}'
+        with:
+          script: |
+            const { PREV_VERSION, RELEASE_TYPE } = process.env;
+            console.log('Previous version was', PREV_VERSION);
+            console.log('Release type is', RELEASE_TYPE);
+
+            const numbers = PREV_VERSION.split('.');
+            const numberIdx = ['type/major', 'type/minor', 'type/patch'].indexOf(RELEASE_TYPE);
+            numbers[numberIdx] = parseInt(numbers[numberIdx]) + 1;
+            for (let i = numberIdx + 1; i < numbers.length; i++) {
+              numbers[i] = 0;
+            }
+            return numbers.slice(0, 2).join('.');
+          result-encoding: string
+
